@@ -9,4 +9,4 @@ RUN dotnet publish -c Release -o /app/out
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}
 WORKDIR /app
 COPY --from=build /app/out ./
-ENTRYPOINT ["dotnet", "WebApplication1.dll"]
+ENTRYPOINT ["dotnet", "BurgerFlow.dll"]
