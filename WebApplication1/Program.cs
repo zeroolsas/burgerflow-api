@@ -80,7 +80,7 @@ static async Task<T> AsUser<T>(AppDbContext db, ClaimsPrincipal user, Func<Task<
 // Ёндпоинты
 app.MapGet("/", () => "BurgerFlow API работает");
 
-// Ёндпоинты авторизации дл€ фронтенда (исправл€ет ошибку 404 на /api/auth/...)
+// Ёндпоинты авторизации дл€ фронтенда
 app.MapPost("/api/auth/register", (AuthDto model) =>
 {
     if (string.IsNullOrEmpty(model.Login) || string.IsNullOrEmpty(model.Password))
@@ -175,8 +175,9 @@ app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext d
         return Results.StatusCode(403);
     }
 
-    Tuple<int, int> placeholder = null!; // Just to keep compatibility if needed, or ignore
     return Results.Created($"/orders/{order.Id}", new { order.Id });
 }).RequireAuthorization();
 
 app.Run();
+
+// ћодель AuthDto пр€мо в файле Program.cs, чтобы сборка на Railway точно не падала
