@@ -16,10 +16,11 @@ var connectionString = builder.Configuration.GetConnectionString("Default") ?? t
 
 builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
 
-// Настройка CORS для сайта
-var origins = (builder.Configuration["Cors:Origins"] ?? "http://localhost:3000")
-    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-builder.Services.AddCors(o => o.AddPolicy("web", p => p.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()));
+// Настройка CORS (разрешаем запросы с любых источников, чтобы Vercel не блокировался)
+builder.Services.AddCors(o => o.AddPolicy("web", p => p
+    .AllowAnyOrigin()
+    .AllowAnyHeader()
+    .AllowAnyMethod()));
 
 // Проверка JWT токенов от Supabase
 JsonWebKeySet? jwks = null;
