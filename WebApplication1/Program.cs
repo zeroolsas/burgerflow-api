@@ -180,4 +180,6 @@ app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext d
 
 app.Run();
 
-// Модель AuthDto прямо в файле Program.cs, чтобы сборка на Railway точно не падала
+app.Run();
+
+
