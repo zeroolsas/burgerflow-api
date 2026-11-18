@@ -27,3 +27,5 @@ public class AuthController : ControllerBase
         return Ok(new { token = fakeToken, user = model.Login });
     }
 }
+
+// Модель встроена прямо в файл контроллера, чтобы избежать ошибок отсутствия файлов на сервере

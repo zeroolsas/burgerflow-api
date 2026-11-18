@@ -77,6 +77,11 @@ public class OrderStatusHistory
     public int? ChangedByUserId { get; set; }
     public string? Comment { get; set; }
 }
+public class AuthDto
+{
+    public string Login { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+}
 
 public record NewOrder(List<NewOrderItem> Items);
 public record NewOrderItem(int DishId, int Quantity);
