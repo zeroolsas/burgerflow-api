@@ -180,6 +180,6 @@ app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext d
 
 app.Run();
 
-app.Run();
+
 
 
