@@ -87,7 +87,7 @@ app.MapGet("/", () => "BurgerFlow API работает");
 app.MapPost("/api/auth/register", async (AuthDto model) =>
 {
     if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
-        return Results.BadRequest(new { message = "Email and password are required" });
+        return Results.BadRequest(new { message = "Email и пароль обязательны" });
 
     using var http = new HttpClient();
     http.DefaultRequestHeaders.Add("apikey", supabaseApiKey);
@@ -100,19 +100,19 @@ app.MapPost("/api/auth/register", async (AuthDto model) =>
 
     var body = await res.Content.ReadAsStringAsync();
     if (!res.IsSuccessStatusCode)
-        return Results.BadRequest(new { message = $"Signup error: {body}" });
+        return Results.BadRequest(new { message = $"Ошибка регистрации: {body}" });
 
     using var doc = JsonDocument.Parse(body);
     var token = doc.RootElement.TryGetProperty("access_token", out var t) ? t.GetString() : null;
 
-    return Results.Ok(new { message = "Registered", token, user = model.Login });
+    return Results.Ok(new { message = "Регистрация успешна", token, user = model.Login });
 });
 
 // Вход через Supabase Auth (возвращает настоящий JWT)
 app.MapPost("/api/auth/login", async (AuthDto model) =>
 {
     if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
-        return Results.BadRequest(new { message = "Email and password are required" });
+        return Results.BadRequest(new { message = "Email и пароль обязательны" });
 
     using var http = new HttpClient();
     http.DefaultRequestHeaders.Add("apikey", supabaseApiKey);
@@ -125,7 +125,7 @@ app.MapPost("/api/auth/login", async (AuthDto model) =>
 
     var body = await res.Content.ReadAsStringAsync();
     if (!res.IsSuccessStatusCode)
-        return Results.BadRequest(new { message = $"Login error: {body}" });
+        return Results.BadRequest(new { message = "Неверный email или пароль" });
 
     using var doc = JsonDocument.Parse(body);
     var token = doc.RootElement.GetProperty("access_token").GetString();
@@ -162,27 +162,19 @@ app.MapGet("/orders/my", async (ClaimsPrincipal user, AppDbContext db) =>
 app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext db) =>
 {
     if (dto.Items == null || dto.Items.Count == 0 || dto.Items.Any(i => i.Quantity < 1))
-        return Results.BadRequest(new { message = "Корзина пуста" });
+        return Results.BadRequest("Корзина пуста");
 
     var userId = Guid.Parse(user.FindFirst("sub")!.Value);
     var ids = dto.Items.Select(i => i.DishId).Distinct().ToList();
-    var dishes = await db.Dishes.AsNoTracking()
-        .Where(d => d.IsAvailable && ids.Contains(d.Id))
-        .ToDictionaryAsync(d => d.Id);
+    var dishes = await db.Dishes.AsNoTracking().Where(d => d.IsAvailable && ids.Contains(d.Id)).ToDictionaryAsync(d => d.Id);
 
-    if (dishes.Count != ids.Count)
-        return Results.BadRequest(new { message = "Какого-то блюда нет в меню" });
+    if (dishes.Count != ids.Count) return Results.BadRequest("Какого-то блюда нет в меню");
 
     var customer = await db.Customers.FirstOrDefaultAsync(c => c.UserId == userId);
     if (customer == null)
     {
         var cityId = await db.Cities.Where(c => c.IsActive).OrderBy(c => c.Id).Select(c => c.Id).FirstAsync();
-        customer = new Customer
-        {
-            Name = user.FindFirst("email")?.Value ?? "Клиент сайта",
-            CityId = cityId,
-            UserId = userId
-        };
+        customer = new Customer { Name = user.FindFirst("email")?.Value ?? "Клиент сайта", CityId = cityId, UserId = userId };
         db.Customers.Add(customer);
         await db.SaveChangesAsync();
     }
