@@ -12,6 +12,9 @@ var port = Environment.GetEnvironmentVariable("PORT");
 if (port != null) builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 var supabaseUrl = (builder.Configuration["Supabase:Url"] ?? throw new Exception("Не задан Supabase:Url")).TrimEnd('/');
+var supabaseApiKey = builder.Configuration["Supabase:Key"]
+    ?? builder.Configuration["Supabase:AnonKey"]
+    ?? throw new Exception("Не задан Supabase:Key");
 var connectionString = builder.Configuration.GetConnectionString("Default") ?? throw new Exception("Не задана строка подключения Default");
 
 builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
@@ -80,21 +83,54 @@ static async Task<T> AsUser<T>(AppDbContext db, ClaimsPrincipal user, Func<Task<
 // Эндпоинты
 app.MapGet("/", () => "BurgerFlow API работает");
 
-// Эндпоинты авторизации для фронтенда
-app.MapPost("/api/auth/register", (AuthDto model) =>
+// Регистрация через Supabase Auth
+app.MapPost("/api/auth/register", async (AuthDto model) =>
 {
-    if (string.IsNullOrEmpty(model.Login) || string.IsNullOrEmpty(model.Password))
-        return Results.BadRequest(new { message = "Логин и пароль обязательны" });
-    return Results.Ok(new { message = "Регистрация успешна" });
+    if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
+        return Results.BadRequest(new { message = "Email и пароль обязательны" });
+
+    using var http = new HttpClient();
+    http.DefaultRequestHeaders.Add("apikey", supabaseApiKey);
+
+    var res = await http.PostAsJsonAsync($"{supabaseUrl}/auth/v1/signup", new
+    {
+        email = model.Login.Trim(),
+        password = model.Password
+    });
+
+    var body = await res.Content.ReadAsStringAsync();
+    if (!res.IsSuccessStatusCode)
+        return Results.BadRequest(new { message = $"Ошибка регистрации: {body}" });
+
+    using var doc = JsonDocument.Parse(body);
+    var token = doc.RootElement.TryGetProperty("access_token", out var t) ? t.GetString() : null;
+
+    return Results.Ok(new { message = "Регистрация успешна", token, user = model.Login });
 });
 
-app.MapPost("/api/auth/login", (AuthDto model) =>
+// Вход через Supabase Auth (возвращает настоящий JWT)
+app.MapPost("/api/auth/login", async (AuthDto model) =>
 {
-    if (string.IsNullOrEmpty(model.Login))
-        return Results.BadRequest(new { message = "Неверный логин" });
+    if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
+        return Results.BadRequest(new { message = "Email и пароль обязательны" });
 
-    var fakeToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkNsaWVudCIsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
-    return Results.Ok(new { token = fakeToken, user = model.Login });
+    using var http = new HttpClient();
+    http.DefaultRequestHeaders.Add("apikey", supabaseApiKey);
+
+    var res = await http.PostAsJsonAsync($"{supabaseUrl}/auth/v1/token?grant_type=password", new
+    {
+        email = model.Login.Trim(),
+        password = model.Password
+    });
+
+    var body = await res.Content.ReadAsStringAsync();
+    if (!res.IsSuccessStatusCode)
+        return Results.BadRequest(new { message = "Неверный email или пароль" });
+
+    using var doc = JsonDocument.Parse(body);
+    var token = doc.RootElement.GetProperty("access_token").GetString();
+
+    return Results.Ok(new { token, user = model.Login });
 });
 
 app.MapGet("/menu", async (AppDbContext db) =>
@@ -179,7 +215,3 @@ app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext d
 }).RequireAuthorization();
 
 app.Run();
-
-
-
-
