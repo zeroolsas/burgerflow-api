@@ -12,6 +12,9 @@ var port = Environment.GetEnvironmentVariable("PORT");
 if (port != null) builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 var supabaseUrl = (builder.Configuration["Supabase:Url"] ?? throw new Exception("Не задан Supabase:Url")).TrimEnd('/');
+var supabaseApiKey = builder.Configuration["Supabase:Key"]
+    ?? builder.Configuration["Supabase:AnonKey"]
+    ?? throw new Exception("Не задан Supabase:Key");
 var connectionString = builder.Configuration.GetConnectionString("Default") ?? throw new Exception("Не задана строка подключения Default");
 
 builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
@@ -80,21 +83,54 @@ static async Task<T> AsUser<T>(AppDbContext db, ClaimsPrincipal user, Func<Task<
 // Эндпоинты
 app.MapGet("/", () => "BurgerFlow API работает");
 
-// Эндпоинты авторизации для фронтенда
-app.MapPost("/api/auth/register", (AuthDto model) =>
+// Регистрация через Supabase Auth
+app.MapPost("/api/auth/register", async (AuthDto model) =>
 {
-    if (string.IsNullOrEmpty(model.Login) || string.IsNullOrEmpty(model.Password))
-        return Results.BadRequest(new { message = "Логин и пароль обязательны" });
-    return Results.Ok(new { message = "Регистрация успешна" });
+    if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
+        return Results.BadRequest(new { message = "Email and password are required" });
+
+    using var http = new HttpClient();
+    http.DefaultRequestHeaders.Add("apikey", supabaseApiKey);
+
+    var res = await http.PostAsJsonAsync($"{supabaseUrl}/auth/v1/signup", new
+    {
+        email = model.Login.Trim(),
+        password = model.Password
+    });
+
+    var body = await res.Content.ReadAsStringAsync();
+    if (!res.IsSuccessStatusCode)
+        return Results.BadRequest(new { message = $"Signup error: {body}" });
+
+    using var doc = JsonDocument.Parse(body);
+    var token = doc.RootElement.TryGetProperty("access_token", out var t) ? t.GetString() : null;
+
+    return Results.Ok(new { message = "Registered", token, user = model.Login });
 });
 
-app.MapPost("/api/auth/login", (AuthDto model) =>
+// Вход через Supabase Auth (возвращает настоящий JWT)
+app.MapPost("/api/auth/login", async (AuthDto model) =>
 {
-    if (string.IsNullOrEmpty(model.Login))
-        return Results.BadRequest(new { message = "Неверный логин" });
+    if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
+        return Results.BadRequest(new { message = "Email and password are required" });
 
-    var fakeToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkNsaWVudCIsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
-    return Results.Ok(new { token = fakeToken, user = model.Login });
+    using var http = new HttpClient();
+    http.DefaultRequestHeaders.Add("apikey", supabaseApiKey);
+
+    var res = await http.PostAsJsonAsync($"{supabaseUrl}/auth/v1/token?grant_type=password", new
+    {
+        email = model.Login.Trim(),
+        password = model.Password
+    });
+
+    var body = await res.Content.ReadAsStringAsync();
+    if (!res.IsSuccessStatusCode)
+        return Results.BadRequest(new { message = $"Login error: {body}" });
+
+    using var doc = JsonDocument.Parse(body);
+    var token = doc.RootElement.GetProperty("access_token").GetString();
+
+    return Results.Ok(new { token, user = model.Login });
 });
 
 app.MapGet("/menu", async (AppDbContext db) =>
@@ -126,42 +162,29 @@ app.MapGet("/orders/my", async (ClaimsPrincipal user, AppDbContext db) =>
 app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext db) =>
 {
     if (dto.Items == null || dto.Items.Count == 0 || dto.Items.Any(i => i.Quantity < 1))
-        return Results.BadRequest("Корзина пуста");
+        return Results.BadRequest(new { message = "Корзина пуста" });
 
+    var userId = Guid.Parse(user.FindFirst("sub")!.Value);
     var ids = dto.Items.Select(i => i.DishId).Distinct().ToList();
     var dishes = await db.Dishes.AsNoTracking()
         .Where(d => d.IsAvailable && ids.Contains(d.Id))
         .ToDictionaryAsync(d => d.Id);
 
     if (dishes.Count != ids.Count)
-        return Results.BadRequest("Какого-то блюда нет в меню");
+        return Results.BadRequest(new { message = "Какого-то блюда нет в меню" });
 
-    var subValue = user.FindFirst("sub")?.Value;
-    var hasRealGuid = Guid.TryParse(subValue, out var userId);
-
-    Customer? customer;
-    if (hasRealGuid)
+    var customer = await db.Customers.FirstOrDefaultAsync(c => c.UserId == userId);
+    if (customer == null)
     {
-        customer = await db.Customers.FirstOrDefaultAsync(c => c.UserId == userId);
-        if (customer == null)
+        var cityId = await db.Cities.Where(c => c.IsActive).OrderBy(c => c.Id).Select(c => c.Id).FirstAsync();
+        customer = new Customer
         {
-            var cityId = await db.Cities.Where(c => c.IsActive).OrderBy(c => c.Id).Select(c => c.Id).FirstAsync();
-            customer = new Customer
-            {
-                Name = user.FindFirst("email")?.Value ?? "Клиент сайта",
-                CityId = cityId,
-                UserId = userId
-            };
-            db.Customers.Add(customer);
-            await db.SaveChangesAsync();
-        }
-    }
-    else
-    {
-        // Резервный вариант для учебного токена, если sub не GUID
-        customer = await db.Customers.OrderBy(c => c.Id).FirstOrDefaultAsync();
-        if (customer == null)
-            return Results.BadRequest("В базе нет ни одного покупателя (Customer)");
+            Name = user.FindFirst("email")?.Value ?? "Клиент сайта",
+            CityId = cityId,
+            UserId = userId
+        };
+        db.Customers.Add(customer);
+        await db.SaveChangesAsync();
     }
 
     var createdStatusId = await db.OrderStatuses.Where(s => s.Code == "created").Select(s => s.Id).FirstAsync();
@@ -184,20 +207,12 @@ app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext d
 
     try
     {
-        if (hasRealGuid)
-        {
-            await AsUser(db, user, async () =>
-            {
-                db.Orders.Add(order);
-                await db.SaveChangesAsync();
-                return true;
-            });
-        }
-        else
+        await AsUser(db, user, async () =>
         {
             db.Orders.Add(order);
             await db.SaveChangesAsync();
-        }
+            return true;
+        });
     }
     catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: "42501" })
     {
@@ -205,11 +220,6 @@ app.MapPost("/orders", async (NewOrder dto, ClaimsPrincipal user, AppDbContext d
     }
 
     return Results.Created($"/orders/{order.Id}", new { order.Id });
-
 }).RequireAuthorization();
 
 app.Run();
-
-
-
-
