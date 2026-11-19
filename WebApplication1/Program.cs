@@ -83,7 +83,7 @@ static async Task<T> AsUser<T>(AppDbContext db, ClaimsPrincipal user, Func<Task<
 // Ёндпоинты
 app.MapGet("/", () => "BurgerFlow API работает");
 
-// –егистраци€ через Supabase Auth с автосозданием пользовател€ при необходимости
+// –егистраци€ через Supabase Auth
 app.MapPost("/api/auth/register", async (AuthDto model) =>
 {
     if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
@@ -108,49 +108,24 @@ app.MapPost("/api/auth/register", async (AuthDto model) =>
     return Results.Ok(new { message = "Registered", token, user = model.Login });
 });
 
-// ¬ход через Supabase Auth; если пользовател€ ещЄ нет Ч создаЄм через signup и логинимс€
+// ¬ход через Supabase Auth (возвращает насто€щий JWT)
 app.MapPost("/api/auth/login", async (AuthDto model) =>
 {
     if (string.IsNullOrWhiteSpace(model.Login) || string.IsNullOrWhiteSpace(model.Password))
         return Results.BadRequest(new { message = "Email and password are required" });
 
-    var email = model.Login.Trim();
     using var http = new HttpClient();
     http.DefaultRequestHeaders.Add("apikey", supabaseApiKey);
 
     var res = await http.PostAsJsonAsync($"{supabaseUrl}/auth/v1/token?grant_type=password", new
     {
-        email,
+        email = model.Login.Trim(),
         password = model.Password
     });
 
     var body = await res.Content.ReadAsStringAsync();
     if (!res.IsSuccessStatusCode)
-    {
-        var signUpRes = await http.PostAsJsonAsync($"{supabaseUrl}/auth/v1/signup", new
-        {
-            email,
-            password = model.Password
-        });
-
-        if (signUpRes.IsSuccessStatusCode)
-        {
-            var signUpBody = await signUpRes.Content.ReadAsStringAsync();
-            using var signUpDoc = JsonDocument.Parse(signUpBody);
-            if (signUpDoc.RootElement.TryGetProperty("access_token", out var newTokenEl) && newTokenEl.GetString() is { Length: > 0 } newToken)
-                return Results.Ok(new { token = newToken, user = model.Login });
-
-            res = await http.PostAsJsonAsync($"{supabaseUrl}/auth/v1/token?grant_type=password", new
-            {
-                email,
-                password = model.Password
-            });
-            body = await res.Content.ReadAsStringAsync();
-        }
-
-        if (!res.IsSuccessStatusCode)
-            return Results.BadRequest(new { message = $"Login error: {body}" });
-    }
+        return Results.BadRequest(new { message = $"Login error: {body}" });
 
     using var doc = JsonDocument.Parse(body);
     var token = doc.RootElement.GetProperty("access_token").GetString();
